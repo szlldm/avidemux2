@@ -5,7 +5,8 @@
 
 # TOPSRCDIR must match the location of the Avidemux source tree,
 # default: ${HOME}/avidemux2
-TOPSRCDIR="${HOME}/avidemux2"
+#TOPSRCDIR="${HOME}/avidemux2"
+TOPSRCDIR="."
 
 # PREFIX must match the prefix passed to bootStrap.bash when compiling Avidemux,
 # default when no prefix specified: /usr
