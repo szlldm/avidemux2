@@ -66,7 +66,7 @@ int DIA_getAudioFilter(ADM_AUDIOFILTER_CONFIG *config)
   
   diaElemFrame  frameGain(QT_TRANSLATE_NOOP("adm","Gain"));
   diaElemMenu   eGain(&vGainMode,QT_TRANSLATE_NOOP("adm","_Gain mode:"),3,menuGain);   
-  diaElemFloat  eGainValue(&vGainValue,QT_TRANSLATE_NOOP("adm","G_ain value:"),-10,40);
+  diaElemFloat  eGainValue(&vGainValue,QT_TRANSLATE_NOOP("adm","G_ain value:"),-30,40);
   diaElemFloat  eGainMaxLevel(&vGainMaxLevel,QT_TRANSLATE_NOOP("adm","_Maximum value:"),-10,0);
   
   eGain.link(&(menuGain[2]),1,&eGainValue);
