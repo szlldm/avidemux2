@@ -35,6 +35,8 @@ class  motin
     ADMImage ** pyramidB;
     ADMImage ** pyramidWA;
     ADMImage ** pyramidWB;
+    int *       motionMapA[2];
+    int *       motionMapB[2];
     ADMColorScalerFull ** upScalersA;
     ADMColorScalerFull ** upScalersB;
     ADMColorScalerFull ** downScalers;
@@ -50,10 +52,12 @@ class  motin
     
     typedef struct {
         int lv;
+        int search_radius;
         uint8_t * plA[3];
         uint8_t * plB[3];
         uint8_t * plW[3];
         int strides[3];
+        int * motionMap[2];
         uint32_t w,h;
         uint32_t ystart, yincr;
     } worker_thread_arg;
@@ -66,7 +70,8 @@ class  motin
     static void *me_worker_thread( void *ptr );
     static void *spf_worker_thread( void *ptr );
     
-    static int sad(uint8_t * p1, uint8_t * p2, int stride, int x1, int y1, int x2, int y2);
+    static int sad8x8(uint8_t * p1, uint8_t * p2, int stride, int x1, int y1, int x2, int y2);
+    static int sad16x16(uint8_t * p1, uint8_t * p2, int stride, int x1, int y1, int x2, int y2);
 
   public:
     motin(int width, int height);

@@ -30,6 +30,10 @@ motin::motin(int width, int height)
     pyramidB = new ADMImage* [MOTIN_MAX_PYRAMID_LEVELS];
     pyramidWA = new ADMImage* [MOTIN_MAX_PYRAMID_LEVELS];
     pyramidWB = new ADMImage* [MOTIN_MAX_PYRAMID_LEVELS];
+    motionMapA[0] = new int [(width/2)*(height/2)];
+    motionMapA[1] = new int [(width/2)*(height/2)];
+    motionMapB[0] = new int [(width/2)*(height/2)];
+    motionMapB[1] = new int [(width/2)*(height/2)];
     upScalersA   = new ADMColorScalerFull* [MOTIN_MAX_PYRAMID_LEVELS];
     upScalersB   = new ADMColorScalerFull* [MOTIN_MAX_PYRAMID_LEVELS];
     downScalers = new ADMColorScalerFull* [MOTIN_MAX_PYRAMID_LEVELS];
@@ -90,7 +94,10 @@ motin::~motin()
         delete pyramidWA[lv];
         delete pyramidWB[lv];
     }
-    
+    delete [] motionMapA[0];
+    delete [] motionMapA[1];
+    delete [] motionMapB[0];
+    delete [] motionMapB[1];
     
     delete [] upScalersA;
     delete [] upScalersB;
@@ -209,7 +216,7 @@ void motin::createPyramids(ADMImage * imgA, ADMImage * imgB)
     }*/
 }
 
-int motin::sad(uint8_t * p1, uint8_t * p2, int stride, int x1, int y1, int x2, int y2)
+int motin::sad8x8(uint8_t * p1, uint8_t * p2, int stride, int x1, int y1, int x2, int y2)
 {
     volatile int tmp = 0;
     unsigned int a,b,i,j;
@@ -303,26 +310,194 @@ int motin::sad(uint8_t * p1, uint8_t * p2, int stride, int x1, int y1, int x2, i
     return tmp;
 }
 
+int motin::sad16x16(uint8_t * p1, uint8_t * p2, int stride, int x1, int y1, int x2, int y2)
+{
+    volatile int tmp = 0;
+    unsigned int a,b,i,j;
+    uint8_t * ptrb1, * ptrb2, * ptr1, * ptr2;
+
+    x1 -= 7;
+    y1 -= 7;
+    x2 -= 7;
+    y2 -= 7;
+    
+    ptrb1 = p1 + x1 + y1*stride;
+    ptrb2 = p2 + x2 + y2*stride;
+    
+#ifdef CAN_DO_INLINE_X86_ASM
+ if(CpuCaps::hasSSE2())
+ {
+    __asm__(
+    ADM_ASM_ALIGN16
+    "pxor %%xmm7,%%xmm7\n"
+    ::);
+    
+    uint8_t * ptrb3, * ptrb4;
+    ptrb3 = ptrb1 + stride;
+    ptrb4 = ptrb2 + stride;
+
+    for (j=0; j<8; j++)
+    {
+        __asm__(
+        ADM_ASM_ALIGN16
+        "movdqu (%0),%%xmm0 \n"
+        "movdqu (%1),%%xmm1 \n"
+        "psadbw %%xmm1,%%xmm0\n"
+        "movdqu (%2),%%xmm2 \n"
+        "movdqu (%3),%%xmm3 \n"
+        "psadbw %%xmm3,%%xmm2\n"
+        "paddd %%xmm0,%%xmm7 \n"
+        "paddd %%xmm2,%%xmm7 \n"
+        : : "r" (ptrb1) , "r" (ptrb2) , "r" (ptrb3) , "r" (ptrb4)
+        );
+        ptrb1 += stride*2;
+        ptrb2 += stride*2;
+        ptrb3 += stride*2;
+        ptrb4 += stride*2;
+    }
+    
+    __asm__(
+    ADM_ASM_ALIGN16
+    "movhlps %%xmm7, %%xmm6\n"
+    "paddd %%xmm6,%%xmm7 \n"
+    "movd %%xmm7,(%0)\n"
+    :: "r" (&tmp)
+    );
+ } else
+ if(CpuCaps::hasMMX())
+ {
+    __asm__(
+    ADM_ASM_ALIGN16
+    "pxor %%mm7,%%mm7\n"
+    ::);
+    
+    uint8_t * ptrb3, * ptrb4;
+    ptrb3 = ptrb1 + stride;
+    ptrb4 = ptrb2 + stride;
+
+    for (j=0; j<8; j++)
+    {
+        __asm__(
+        ADM_ASM_ALIGN16
+        "movq (%0),%%mm0 \n"
+        "movq (%1),%%mm1 \n"
+        "psadbw %%mm1,%%mm0\n"
+        "movq (%2),%%mm2 \n"
+        "movq (%3),%%mm3 \n"
+        "psadbw %%mm3,%%mm2\n"
+        "paddd %%mm0,%%mm7 \n"
+        "paddd %%mm2,%%mm7 \n"
+        "movq 8(%0),%%mm0 \n"
+        "movq 8(%1),%%mm1 \n"
+        "psadbw %%mm1,%%mm0\n"
+        "movq 8(%2),%%mm2 \n"
+        "movq 8(%3),%%mm3 \n"
+        "psadbw %%mm3,%%mm2\n"
+        "paddd %%mm0,%%mm7 \n"
+        "paddd %%mm2,%%mm7 \n"
+        : : "r" (ptrb1) , "r" (ptrb2) , "r" (ptrb3) , "r" (ptrb4)
+        );
+        ptrb1 += stride*2;
+        ptrb2 += stride*2;
+        ptrb3 += stride*2;
+        ptrb4 += stride*2;
+    }
+    
+    __asm__(
+    ADM_ASM_ALIGN16
+    "movd %%mm7,(%0)\n"
+    "emms \n"
+    :: "r" (&tmp)
+    );
+ }
+ else
+#endif 
+ {
+    for (j=0; j<16; j++)
+    {
+            ptr1 = ptrb1;
+            ptr2 = ptrb2;
+            ptrb1 += stride;
+            ptrb2 += stride;
+        //for (i=0; i<16; i++)
+        //{ unroll ->
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+            a = *ptr1++;
+            b = *ptr2++;
+            tmp += abs((int)a - (int)b);
+        //}
+    }
+ }
+    return tmp;
+}
 
 void *motin::me_worker_thread( void *ptr )
 {
     worker_thread_arg * arg = (worker_thread_arg*)ptr;
     int lv = arg->lv;
+    int search_radius = arg->search_radius;
     uint8_t ** plA = arg->plA;
     uint8_t ** plB = arg->plB;
     uint8_t ** plW = arg->plW;
     int * strides = arg->strides;
+    int * motionMap[2];
+    motionMap[0] = arg->motionMap[0];
+    motionMap[1] = arg->motionMap[1];
     uint32_t w = arg->w;
     uint32_t h = arg->h;
     uint32_t ystart = arg->ystart;
     uint32_t yincr = arg->yincr;
     int x,y,bx,by;
 
-    int penaltyTable[MOTIN_SEARCH_RADIUS+2][MOTIN_SEARCH_RADIUS+2];
+    int penaltyTable[MOTIN_SEARCH_RADIUS+search_radius+2][MOTIN_SEARCH_RADIUS+search_radius+2];
 
-    for (y=0; y<(MOTIN_SEARCH_RADIUS+2); y++)
+    for (y=0; y<(MOTIN_SEARCH_RADIUS+search_radius+2); y++)
     {
-        for (x=0; x<(MOTIN_SEARCH_RADIUS+2); x++)
+        for (x=0; x<(MOTIN_SEARCH_RADIUS+search_radius+2); x++)
         {
             penaltyTable[y][x] = std::round(std::pow(((y+.5)*(y+.5) + (x+.5)*(x+.5)), 1/3.)  * 256);  // add distance penalty <-- this looks like better than sqrt or double sqrt
         }
@@ -347,26 +522,31 @@ void *motin::me_worker_thread( void *ptr )
             {
                 initX -= x*2;
                 initY -= y*2;
-                initX += 128;
-                initY += 128;
-                plW[1][y*strides[1]+x] = initX;
-                plW[2][y*strides[2]+x] = initY;
+                if (lv > 0)
+                {
+                    initX += 128;
+                    initY += 128;
+                    plW[1][y*strides[1]+x] = initX;
+                    plW[2][y*strides[2]+x] = initY;
+                } else {
+                    motionMap[0][y*w+x] = initX;
+                    motionMap[1][y*w+x] = initY;
+                }
                 continue;
             }
             
             int best[2];
             best[0] = initX;
             best[1] = initY;
-            int sad0 = sad(plA[0], plB[0], strides[0], x*2, y*2, initX, initY);
+            int sad0 = sad16x16(plA[0], plB[0], strides[0], x*2, y*2, initX, initY);
             
-            int radius = MOTIN_SEARCH_RADIUS + ((lv > 0) ? 1:0);
-            for (by=(initY-radius);by<=(initY+radius);by++)
+            for (by=(initY-search_radius);by<=(initY+search_radius);by++)
             {
                 if (by < 0+3)
                     continue;
                 if (by >= (h*2-1)-3)
                     continue;
-                for (bx=(initX-radius);bx<=(initX+radius);bx++)
+                for (bx=(initX-search_radius);bx<=(initX+search_radius);bx++)
                 {
                     if (bx < 0+3)
                         continue;
@@ -375,7 +555,7 @@ void *motin::me_worker_thread( void *ptr )
                     if ((bx == initX) && (by == initY))
                         continue;
                     
-                    int sadc = sad(plA[0], plB[0], strides[0], x*2, y*2, bx, by);
+                    int sadc = sad16x16(plA[0], plB[0], strides[0], x*2, y*2, bx, by);
                     sadc = (sadc * penaltyTable[abs(by-initY)][abs(bx-initX)]) / 256;
                     
                     if (sadc < sad0)
@@ -389,17 +569,25 @@ void *motin::me_worker_thread( void *ptr )
             
             best[0] -= x*2;
             best[1] -= y*2;
-            best[0] += 128;
-            best[1] += 128;
-            for (int bl=0; bl<2; bl++)
+            if (lv==0)
             {
-                if (best[bl] < 16)
-                    best[bl] = 16;
-                if (best[bl] > 240)
-                    best[bl] = 240;
+                motionMap[0][y*w+x] = best[0];
+                motionMap[1][y*w+x] = best[1];
             }
-            plW[1][y*strides[1]+x] = best[0];
-            plW[2][y*strides[2]+x] = best[1];
+            else
+            {
+                best[0] += 128;
+                best[1] += 128;
+                for (int bl=0; bl<2; bl++)
+                {
+                    if (best[bl] < 16)
+                        best[bl] = 16;
+                    if (best[bl] > 240)
+                        best[bl] = 240;
+                }
+                plW[1][y*strides[1]+x] = best[0];
+                plW[2][y*strides[2]+x] = best[1];
+            }
         }
     }
 
@@ -458,6 +646,8 @@ void *motin::spf_worker_thread( void *ptr )
     }
     
     // spatial filter
+if (lv>0)	//TODO indent
+{
     for (y=0; y<h; y++)
     {
         for (x=0; x<w; x++)
@@ -483,6 +673,8 @@ void *motin::spf_worker_thread( void *ptr )
                     cnt += 1;
                 }
             }
+            sumX += cnt/2;
+            sumY += cnt/2;
             sumX /= cnt;
             sumY /= cnt;
             plA[1][x + y*strides[1]] = sumX;
@@ -497,7 +689,7 @@ void *motin::spf_worker_thread( void *ptr )
             plW[2][x + y*strides[2]] = plA[2][x + y*strides[2]];
         }
     }
-
+}
     pthread_exit(NULL);
 
     return NULL;
@@ -535,7 +727,7 @@ void motin::estimateMotion()
         memset(wplanes[2] + y*strides[2], 128, w);
     }
 
-
+    int search_radius = 16;
     for (int lv=pyramidLevels-1; lv>=0; lv--)
     {
         {
@@ -554,26 +746,40 @@ void motin::estimateMotion()
                 memset(plW[0]+y*strides[0], 128, w);
         }
 
+        if (lv==0)
+            search_radius = 2;
+        else
+            search_radius = ((search_radius > 2) ? search_radius : 2);
+
         for (int tr=0; tr<threads; tr++)
         {
             worker_thread_args1[tr].lv = lv;
+            worker_thread_args1[tr].search_radius = search_radius;// + MOTIN_SEARCH_RADIUS;
             pyramidA[lv]->GetWritePlanes(worker_thread_args1[tr].plA);
             pyramidB[lv]->GetWritePlanes(worker_thread_args1[tr].plB);
             pyramidWA[lv]->GetWritePlanes(worker_thread_args1[tr].plW);
             pyramidA[lv]->GetPitches(worker_thread_args1[tr].strides);
             pyramidA[lv]->getWidthHeight(&worker_thread_args1[tr].w, &worker_thread_args1[tr].h);
+            worker_thread_args1[tr].motionMap[0] = motionMapA[0];
+            worker_thread_args1[tr].motionMap[1] = motionMapA[1];
             worker_thread_args1[tr].ystart = tr;
             worker_thread_args1[tr].yincr = threads;
 
             worker_thread_args2[tr].lv = lv;
+            worker_thread_args2[tr].search_radius = search_radius;// + MOTIN_SEARCH_RADIUS;
             pyramidB[lv]->GetWritePlanes(worker_thread_args2[tr].plA);
             pyramidA[lv]->GetWritePlanes(worker_thread_args2[tr].plB);
             pyramidWB[lv]->GetWritePlanes(worker_thread_args2[tr].plW);
             pyramidA[lv]->GetPitches(worker_thread_args2[tr].strides);
             pyramidA[lv]->getWidthHeight(&worker_thread_args2[tr].w, &worker_thread_args2[tr].h);
+            worker_thread_args2[tr].motionMap[0] = motionMapB[0];
+            worker_thread_args2[tr].motionMap[1] = motionMapB[1];
             worker_thread_args2[tr].ystart = tr;
             worker_thread_args2[tr].yincr = threads;
         }
+        
+        search_radius /= 2;
+        
         for (int tr=0; tr<threads; tr++)
         {
             pthread_create( &me_threads1[tr], NULL, me_worker_thread, (void*) &worker_thread_args1[tr]);
@@ -597,7 +803,7 @@ void motin::estimateMotion()
         
         
         // filter
-        {
+        /*{
             int x,y,bx,by;
             uint8_t * plA[3];
             uint8_t * plB[3];
@@ -639,7 +845,7 @@ void motin::estimateMotion()
                     plB[2][y*strides[2]+x] = by;
                 }
             }
-        }
+        }*/
         
         for (int dir=0; dir<2; dir++)
         {
@@ -698,14 +904,18 @@ void motin::interpolate(ADMImage * dst, int alpha)
         for (x=0; x<frameW/2; x++)
         {
             int mxA,myA,mxB,myB;
-            mxA = (unsigned int)wAplanes[1][x + y*wstrides[1]];
+            /*mxA = (unsigned int)wAplanes[1][x + y*wstrides[1]];
             myA = (unsigned int)wAplanes[2][x + y*wstrides[2]];
             mxB = (unsigned int)wBplanes[1][x + y*wstrides[1]];
             myB = (unsigned int)wBplanes[2][x + y*wstrides[2]];
             mxA -= 128;
             myA -= 128;
             mxB -= 128;
-            myB -= 128;
+            myB -= 128;*/
+            mxA = motionMapA[0][x + y*(frameW/2)];
+            myA = motionMapA[1][x + y*(frameW/2)];
+            mxB = motionMapB[0][x + y*(frameW/2)];
+            myB = motionMapB[1][x + y*(frameW/2)];
             mxA = (mxA*alpha)/256;
             myA = (myA*alpha)/256;
             mxB = (mxB*alpham)/256;
